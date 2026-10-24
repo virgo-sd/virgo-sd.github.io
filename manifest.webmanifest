@@ -1,0 +1,37 @@
+{
+  "id": "./",
+  "name": "VIRGO: Space Dominion",
+  "short_name": "VIRGO",
+  "description": "VIRGO: Space Dominion - Weltraum-Strategiespiel im Browser. Baue Kolonien, erforsche Technologien und kämpfe um die Galaxie.",
+  "lang": "de",
+  "start_url": "./",
+  "scope": "./",
+  "display": "fullscreen",
+  "display_override": [
+    "fullscreen",
+    "standalone"
+  ],
+  "orientation": "any",
+  "background_color": "#000000",
+  "theme_color": "#050912",
+  "icons": [
+    {
+      "src": "icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "icon-maskable-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
+  ]
+}

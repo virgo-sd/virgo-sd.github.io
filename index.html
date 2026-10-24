@@ -1,0 +1,740 @@
+<!DOCTYPE html>
+<html lang="de">
+  <head>
+    <meta charset="utf-8">
+    <meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+    <title>VIRGO: Space Dominion – Weltraum-Strategiespiel im Browser</title>
+    <!-- NEU (22.10.2026): Web-App (PWA): Symbol auf dem Startbildschirm, Start ohne Adressleiste, automatische Updates -->
+    <link rel="manifest" href="manifest.webmanifest">
+    <link rel="icon" type="image/png" href="icon-192.png">
+    <link rel="apple-touch-icon" href="apple-touch-icon.png">
+    <meta name="theme-color" content="#050912">
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-title" content="VIRGO">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <style>
+      /* Verhindert, dass die SEITE SELBST scrollt (nur das interne
+         Scroll-Fenster im Spiel soll reagieren). itch.io deutet Seiten-
+         Scroll im eingebetteten Vollbild-Modus fälschlich als "Vollbild
+         verlassen" -> Spiel bricht ab. Gilt jetzt für ALLE Geräte, nicht
+         nur Mobile. */
+      html, body {
+        margin: 0;
+        padding: 0;
+        border: 0;
+        width: 100%;
+        height: 100%;
+        overflow: hidden;
+        overscroll-behavior: none;
+        text-align: center;
+        background: #231F20; /* NEU 23.10.: nie weisse Flaechen (z.B. wenn die Tastatur das Spielfenster verkleinert) */
+      }
+      #unity-canvas {
+        touch-action: none; /* Browser soll Touch-Gesten NIE als Seiten-Scroll interpretieren */
+        display: block;
+      }
+
+      /* -------------------------------------------------------
+         NEU (07.09.): Querformat-Sperre — rein CSS-basiert (kein JS
+         nötig), funktioniert dadurch zuverlässig auf allen Browsern,
+         auch iOS Safari, wo die "echten" Bildschirm-Ausrichtungs-Sperr-
+         APIs (screen.orientation.lock) bekanntlich schlecht/gar nicht
+         unterstützt werden. Liegt mit dem HÖCHSTEN z-index von allem auf
+         der Seite — deckt auch den Ladebildschirm ab, falls das Gerät
+         schon WÄHREND des Ladens im Hochformat gehalten wird, nicht erst
+         danach.
+         ------------------------------------------------------- */
+      #rotate-device-overlay {
+        display: none;
+        position: fixed;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+        background: #000;
+        z-index: 999999;
+        color: #fff;
+        flex-direction: column;
+        justify-content: center;
+        align-items: center;
+        text-align: center;
+        font-family: Arial, Helvetica, sans-serif;
+        padding: 20px;
+        box-sizing: border-box;
+      }
+
+      #rotate-device-overlay .rotate-icon {
+        font-size: 60px;
+        margin-bottom: 20px;
+        animation: rotate-hint 2s ease-in-out infinite;
+      }
+
+      @keyframes rotate-hint {
+        0%, 100% { transform: rotate(0deg); }
+        50%      { transform: rotate(90deg); }
+      }
+
+      /* 23.10.2026: Querformat-Zwang ENTFERNT (Hochformat ist z.B. beim Login sinnvoll) - das Overlay wird nicht mehr eingeblendet. */
+
+      /* -------------------------------------------------------
+         NEU (31.08.): Eigener Ladebildschirm mit Diashow (14 Bilder,
+         zufällige Reihenfolge, alle 5s Überblendung) + echtem
+         Fortschrittsbalken statt des grauen Standard-Bildschirms.
+         Liegt über allem (z-index), bis Unity fertig geladen hat.
+         ------------------------------------------------------- */
+      #custom-loading {
+        position: fixed;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+        background: #000;
+        z-index: 9999;
+        display: flex;
+        flex-direction: column;
+        justify-content: flex-end;
+        align-items: center;
+        transition: opacity 0.6s ease;
+      }
+
+      #custom-loading #loading-background {
+        position: absolute;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+        background-size: cover;
+        background-position: center;
+        opacity: 0;
+        transition: opacity 1.2s ease-in-out;
+      }
+
+      #custom-loading #loading-background.active {
+        opacity: 1;
+      }
+
+      /* NEU (01.09.): Pulsierender blauer Text auf Fensterhöhe —
+         "Systeme werden hochgefahren...". "top" bei Bedarf anpassen,
+         falls es bei eurer Bildkomposition nicht exakt auf Fensterhöhe
+         sitzt (hängt vom jeweiligen Hintergrundbild ab). */
+      #custom-loading-status {
+        position: absolute;
+        top: 30%;
+        left: 50%;
+        transform: translate(-50%, -50%);
+        z-index: 2;
+        color: #7EC8F2;
+        font-family: Arial, Helvetica, sans-serif;
+        font-size: 22px;
+        letter-spacing: 2px;
+        text-align: center;
+        white-space: nowrap;
+        animation: status-pulse 2.2s ease-in-out infinite;
+      }
+
+      @keyframes status-pulse {
+        0%, 100% {
+          opacity: 0.55;
+          text-shadow: 0 0 6px #4FA8E0, 0 0 10px #4FA8E0;
+        }
+        50% {
+          opacity: 1;
+          text-shadow: 0 0 16px #7EC8F2, 0 0 28px #4FA8E0;
+        }
+      }
+
+      /* NEU (01.09.): Tipp-Text jetzt in Weiß, nicht-kursiv (statt
+         hellgrau/kursiv) — wird per Schreibmaschinen-Effekt Buchstabe
+         für Buchstabe eingeblendet, siehe TIPS[] weiter unten. */
+      #custom-loading-tip {
+        position: relative;
+        z-index: 1;
+        max-width: 700px;
+        margin-bottom: 24px;
+        padding: 0 20px;
+        min-height: 24px; /* verhindert Ruckeln, wenn noch kein Text da ist */
+        color: #FFFFFF;
+        font-family: Arial, Helvetica, sans-serif;
+        font-size: 16px;
+        font-style: normal;
+        text-align: center;
+        text-shadow: 0 1px 3px rgba(0,0,0,0.8);
+        opacity: 0;
+        transition: opacity 0.8s ease;
+      }
+
+      #custom-loading-tip.visible {
+        opacity: 1;
+      }
+
+      #custom-loading-bar-wrap {
+        position: relative;
+        z-index: 1; /* über dem Hintergrundbild */
+        width: 60%;
+        max-width: 600px;
+        height: 20px;
+        background: rgba(255, 255, 255, 0.15);
+        border-radius: 10px;
+        margin-bottom: 60px;
+        overflow: hidden;
+      }
+
+      #custom-loading-bar {
+        width: 0%;
+        height: 100%;
+        background: #FFD966;
+        transition: width 0.2s ease;
+      }
+
+      /* NEU (07.09.): Sichtbare Diagnose-Zeile — zeigt Infos vom
+         VORHERIGEN Ladeversuch an (übersteht einen Absturz/Neustart der
+         Seite über localStorage), damit sich Probleme auf Geräten ohne
+         Anschluss an Entwicklertools (z.B. iPhone ohne Mac) trotzdem
+         nachvollziehen lassen — einfach vom Bildschirm ablesen/abtippen. */
+      #custom-debug-info {
+        position: relative;
+        z-index: 1;
+        max-width: 90%;
+        margin-top: 10px;
+        margin-bottom: 20px;
+        padding: 6px 10px;
+        color: #FFD966;
+        background: rgba(0,0,0,0.5);
+        border-radius: 6px;
+        font-family: monospace;
+        font-size: 11px;
+        text-align: center;
+        white-space: pre-wrap;
+        display: none; /* nur sichtbar, wenn tatsächlich was zu zeigen ist */
+      }
+
+      /* NEU (22.10.2026): Hinweis-Kasten rechts im Ladebildschirm. Erscheint, wenn das Laden länger als ca. 12 Sekunden dauert
+         (zu langsame Verbindung oder ein Filter/Firewall/Kindersicherung blockiert den Download), und bei einem Ladefehler. */
+      #custom-loading-warning {
+        position: absolute;
+        right: 3%;
+        top: 50%;
+        transform: translateY(-50%);
+        width: 28%;
+        min-width: 210px;
+        max-width: 340px;
+        z-index: 3;
+        display: none;
+        box-sizing: border-box;
+        padding: 14px 16px;
+        background: rgba(10, 20, 40, 0.86);
+        border: 1px solid #FFD966;
+        border-radius: 10px;
+        box-shadow: 0 0 18px rgba(0, 0, 0, 0.6);
+        color: #FFFFFF;
+        font-family: Arial, Helvetica, sans-serif;
+        font-size: 15px;
+        line-height: 1.4;
+        text-align: left;
+      }
+      #custom-loading-warning b { color: #FFD966; }
+      #custom-loading-warning.error { border-color: #FF7A7A; }
+      #custom-loading-warning.error b { color: #FF9A9A; }
+      #custom-loading-warning .sub { margin-top: 8px; font-size: 13px; color: #CFE3F5; }
+      #custom-loading-warning .tech { margin-top: 8px; font-family: monospace; font-size: 11px; color: #9FB4C8; word-break: break-word; }
+      #custom-loading-warning button {
+        margin-top: 10px;
+        padding: 7px 16px;
+        border: 0;
+        border-radius: 6px;
+        background: #FFD966;
+        color: #000000;
+        font-weight: bold;
+        cursor: pointer;
+      }
+      /* NEU (22.10.2026): Hinweis "Neue Version verfuegbar" und Knopf "App installieren" (liegen ueber dem Spiel) */
+      #virgo-update-banner, #virgo-install-bar {
+        position: fixed;
+        left: 50%;
+        transform: translateX(-50%);
+        z-index: 100000;
+        display: none;
+        padding: 8px 14px;
+        background: rgba(10, 20, 40, 0.94);
+        border: 1px solid #FFD966;
+        border-radius: 10px;
+        color: #FFFFFF;
+        font-family: Arial, Helvetica, sans-serif;
+        font-size: 14px;
+        text-align: center;
+        box-shadow: 0 0 14px rgba(0, 0, 0, 0.7);
+      }
+      #virgo-update-banner { top: 10px; }
+      #virgo-install-bar { bottom: 10px; }
+      #virgo-update-banner button, #virgo-install-bar button {
+        margin-left: 10px;
+        padding: 5px 12px;
+        border: 0;
+        border-radius: 6px;
+        background: #FFD966;
+        color: #000;
+        font-weight: bold;
+        cursor: pointer;
+      }
+      #virgo-install-bar button.secondary { background: transparent; color: #CFE3F5; font-weight: normal; text-decoration: underline; }
+      @media (max-height: 420px) {
+        #custom-loading-warning { font-size: 12px; padding: 8px 10px; }
+        #custom-loading-warning .sub { font-size: 11px; }
+      }
+    </style>
+  <!--VIRGO-SEO-->
+    <meta name="description" content="VIRGO: Space Dominion ist ein kostenlos spielbares Weltraum-Strategiespiel für Browser und Handy: Kolonien aufbauen, Flotten bauen, Allianzen gründen und um die Galaxie kämpfen.">
+    <meta name="robots" content="index, follow, max-image-preview:large">
+    <link rel="canonical" href="https://virgo-sd.github.io/">
+    <meta property="og:type" content="website">
+    <meta property="og:site_name" content="VIRGO: Space Dominion">
+    <meta property="og:title" content="VIRGO: Space Dominion – Weltraum-Strategiespiel im Browser">
+    <meta property="og:description" content="Baue Kolonien, erforsche Technologien, gründe Allianzen und kämpfe um die Galaxie. Kostenlos spielbar im Browser und als App.">
+    <meta property="og:url" content="https://virgo-sd.github.io/">
+    <meta property="og:image" content="https://virgo-sd.github.io/og-image.jpg">
+    <meta property="og:image:width" content="1200">
+    <meta property="og:image:height" content="630">
+    <meta property="og:locale" content="de_DE">
+    <meta name="twitter:card" content="summary_large_image">
+    <meta name="twitter:title" content="VIRGO: Space Dominion – Weltraum-Strategiespiel im Browser">
+    <meta name="twitter:description" content="Baue Kolonien, erforsche Technologien, gründe Allianzen und kämpfe um die Galaxie.">
+    <meta name="twitter:image" content="https://virgo-sd.github.io/og-image.jpg">
+    <script type="application/ld+json">
+    {
+      "@context": "https://schema.org",
+      "@type": "VideoGame",
+      "name": "VIRGO: Space Dominion",
+      "url": "https://virgo-sd.github.io/",
+      "description": "Weltraum-Strategiespiel im Browser und als App: Kolonien aufbauen, Technologien erforschen, Flotten bauen, Allianzen gründen und um die Galaxie kämpfen.",
+      "image": "https://virgo-sd.github.io/og-image.jpg",
+      "inLanguage": "de",
+      "genre": ["Strategie", "Weltraum", "Aufbau", "Mehrspieler"],
+      "gamePlatform": ["Web Browser"],
+      "applicationCategory": "Game",
+      "operatingSystem": "Any",
+      "playMode": "MultiPlayer",
+      "offers": { "@type": "Offer", "price": "0", "priceCurrency": "EUR" }
+    }
+    </script>
+  </head>
+  <body>
+<!--VIRGO-SEO-TEXT-->
+    <style>.virgo-sr-only{position:absolute;width:1px;height:1px;margin:-1px;padding:0;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}</style>
+    <div class="virgo-sr-only">
+      <h1>VIRGO: Space Dominion – Weltraum-Strategiespiel im Browser</h1>
+      <p>VIRGO: Space Dominion ist ein Weltraum-Strategiespiel für Mehrspieler. Du führst als Commander eine Kolonie in einer gemeinsamen Galaxie: Du baust Gebäude, förderst Ressourcen, erforschst Technologien, stellst Flotten zusammen und schickst sie auf Missionen. Du handelst mit anderen Spielern, schließt dich zu Allianzen zusammen und verteidigst deine Planeten gegen Piraten und feindliche Flotten.</p>
+      <h2>Das Spiel in Kürze</h2>
+      <ul>
+        <li>Kolonien aufbauen und Rohstoffe fördern</li>
+        <li>Technologien erforschen und Raumschiffe bauen</li>
+        <li>Flotten entsenden: Angriff, Transport, Stationierung, Kolonisation</li>
+        <li>Allianzen gründen, gemeinsam forschen und kämpfen</li>
+        <li>Spielerhandel und Marktplatz</li>
+        <li>Kostenlos spielbar im Browser, installierbar als App</li>
+      </ul>
+      <p>Das Spiel befindet sich in der Alpha-Phase. Kontakt und Impressum findest du im Spiel auf dem Login-Bildschirm.</p>
+    </div>
+    <noscript>VIRGO: Space Dominion ist ein Weltraum-Strategiespiel im Browser. Bitte aktiviere JavaScript, um zu spielen.</noscript>
+
+    <div id="rotate-device-overlay">
+      <div class="rotate-icon">&#128241;</div>
+      <div>Bitte drehe dein Gerät ins Querformat, um VIRGO: Space Dominion zu spielen.</div>
+    </div>
+    <div id="custom-loading">
+      <div id="loading-background"></div>
+      <div id="custom-loading-status">Systeme werden hochgefahren. Bitte warten ...</div>
+      <div id="custom-loading-tip"></div>
+      <div id="custom-loading-bar-wrap">
+        <div id="custom-loading-bar"></div>
+      </div>
+      <div id="custom-debug-info"></div>
+      <div id="custom-loading-warning"></div>
+    </div>
+    <div id="virgo-update-banner">Neue Version verfügbar. <button id="virgo-update-btn">Neu laden</button></div>
+    <div id="virgo-install-bar"><span id="virgo-install-text">VIRGO als App installieren?</span> <button id="virgo-install-btn">Installieren</button><button class="secondary" id="virgo-install-no">Nicht mehr fragen</button></div>
+    <canvas id="unity-canvas" width=1920 height=1080 tabindex="-1" style="width: 1920px; height: 1080px; background: #231F20"></canvas>
+    <script src="Build/ccef33eab9809093170005d71659f2b7.loader.js"></script>
+    <script>
+      var canvas = document.querySelector("#unity-canvas");
+      var isMobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
+
+      if (isMobile) {
+        // Mobile device style: fill the whole browser client area with the game canvas.
+        // "shrink-to-fit=yes" bewusst ENTFERNT — ältere Safari-Versionen
+        // sind dafür bekannt, dass dieser Parameter zu unerwarteten
+        // Skalierungen/Zoom-Effekten führen kann.
+        var meta = document.createElement('meta');
+        meta.name = 'viewport';
+        meta.content = 'width=device-width, height=device-height, initial-scale=1.0, user-scalable=no, viewport-fit=cover';
+        document.getElementsByTagName('head')[0].appendChild(meta);
+
+        document.body.style.textAlign = "left";
+
+        // NEU (02.09.): Zusätzlicher Schutz gegen iOS-Safari-spezifisches
+        // Problem — Vollbild wird beim Scrollen ingame (z.B. innerhalb
+        // eines ScrollViews) manchmal unerwartet verlassen, obwohl
+        // overscroll-behavior/touch-action (siehe CSS oben) das eigentlich
+        // verhindern sollten. { passive: false } + preventDefault() greift
+        // direkter/früher als die reinen CSS-Eigenschaften und blockt
+        // JEDE Touch-Scroll-Geste auf Seitenebene — für eine Vollbild-
+        // Spielseite ohne eigenes Seiten-Scrollen unproblematisch.
+        // HINWEIS: Falls dadurch das interne Scrollen in Unity-eigenen
+        // ScrollViews (z.B. BuildingWindow-Liste) auf iOS beeinträchtigt
+        // wird, müsste das gezielt eingeschränkt werden — bei Bedarf im
+        // Chat melden, dann grenzen wir das genauer eingrenzen.
+        document.body.addEventListener('touchmove', function (e) {
+          e.preventDefault();
+        }, { passive: false });
+      }
+
+      // Canvas füllt IMMER den kompletten sichtbaren Bereich, egal ob
+      // Desktop oder Mobile — vorher lief das nur auf Mobilgeräten,
+      // Desktop blieb fälschlich bei den festen 1920x1080 Pixeln
+      // aus dem HTML-Grundgerüst stehen.
+      canvas.style.position = "fixed";
+      canvas.style.top  = "0";
+      canvas.style.left = "0";
+
+      // -------------------------------------------------------
+      // Zentrale Resize-Funktion — läuft nicht nur einmal beim Laden,
+      // sondern bei JEDER Änderung des sichtbaren Bereichs (Fenster
+      // verschieben/resizen am Desktop, Safari-Adressleiste ein-/
+      // ausblenden, Drehung, Tastatur öffnen, usw.). Gilt jetzt für
+      // ALLE Geräte gleichermaßen, nicht mehr nur Mobile.
+      //
+      // Drei-stufiger Fallback: manche ältere Safari-Versionen berechnen
+      // SOWOHL window.visualViewport ALS AUCH window.innerWidth/
+      // innerHeight unzuverlässig, wenn "position: fixed" + "height: 100%"
+      // kombiniert werden. document.documentElement (also <html>)
+      // clientWidth/clientHeight sind davon unabhängig und gelten als
+      // der robusteste, älteste, am breitesten unterstützte Weg, die
+      // tatsächlich sichtbare Fläche zu ermitteln.
+      // -------------------------------------------------------
+      function resizeCanvas() {
+        var vw, vh;
+
+        // NEU 23.10.2026: Auf dem iPhone verkleinert die Bildschirmtastatur den "visualViewport" auf einen schmalen Streifen
+        // - das Spiel schrumpfte mit, der Rest war weiss, Login/Registrierung unmoeglich. Auf Handys deshalb die
+        // Layout-Groesse (innerWidth/innerHeight) nehmen: die aendert sich beim Tastatur-Oeffnen nicht.
+        if (isMobile && window.innerWidth && window.innerHeight) {
+          vw = window.innerWidth;
+          vh = window.innerHeight;
+        } else if (window.visualViewport) {
+          vw = window.visualViewport.width;
+          vh = window.visualViewport.height;
+        } else if (window.innerWidth && window.innerHeight) {
+          vw = window.innerWidth;
+          vh = window.innerHeight;
+        } else {
+          // Letzte Rückfallebene für sehr alte Browser
+          vw = document.documentElement.clientWidth;
+          vh = document.documentElement.clientHeight;
+        }
+
+        canvas.style.width  = vw + "px";
+        canvas.style.height = vh + "px";
+      }
+
+      window.addEventListener('resize', resizeCanvas);
+      window.addEventListener('orientationchange', resizeCanvas);
+      if (window.visualViewport) {
+        window.visualViewport.addEventListener('resize', resizeCanvas);
+      }
+      resizeCanvas(); // einmal sofort beim Laden ausführen
+
+      // -------------------------------------------------------
+      // NEU (06.09.): Auf EIN einziges, fest codiertes Bild reduziert —
+      // keine Liste, keine Zufallsauswahl, kein automatisches Ausprobieren
+      // mehrerer Dateiendungen mehr. Weniger bewegliche Teile, weniger
+      // Netzwerk-Anfragen ganz am Anfang des Ladevorgangs.
+      var loadingBackground = document.getElementById("loading-background");
+      if (loadingBackground) {
+        loadingBackground.style.backgroundImage = "url('HG01.png')";   // 22.10.2026: war "HG01.PNG" - auf itch.io (Gross-/Kleinschreibung zaehlt) wurde das Bild deshalb nie geladen
+        loadingBackground.classList.add("active");
+      }
+
+      // -------------------------------------------------------
+      // NEU (01.09.): Wechselnde Spieltipps während des Ladens, nach dem
+      // Vorbild von World of Warcraft. Beliebig viele Einträge möglich —
+      // einfach Zeilen in TIPS[] hinzufügen oder entfernen, jeder Tipp
+      // in Anführungszeichen, durch Komma getrennt.
+      // -------------------------------------------------------
+      var TIPS = [
+        "Tipp: Verwende die Ressourcen-Übersicht oben, um deine Produktion im Blick zu behalten.",
+        "Tipp: Deine Kolonien lassen sich über die Galaxie-Ansicht schnell wechseln.",
+        "Tipp: Ein Systemfehler ist keine Einladung, sondern ein Grund zum Melden — siehst du einen Bug, sag uns Bescheid!",
+        "Tipp: Schließe dich einer Allianz an, um dich mit anderen Kommandanten zu verbünden.",
+        "Tipp: Halte deine Flotten in Bewegung — ein Angriff kündigt sich immer rechtzeitig an."
+      ];
+
+      var loadingTipEl = document.getElementById("custom-loading-tip");
+      var lastTipIndex = -1;
+      var typingTimeoutId = null;
+
+      // NEU (01.09.): Schreibmaschinen-Effekt statt einfachem Fade —
+      // Tipp wird Buchstabe für Buchstabe eingetippt, bleibt dann eine
+      // Weile stehen, wird ausgeblendet, nächster Tipp startet neu.
+      var TYPING_SPEED_MS      = 40; // ms pro Buchstabe
+      var TIP_HOLD_MS          = 2800; // wie lange der fertige Tipp stehen bleibt
+      var TIP_FADE_OUT_MS      = 500;  // muss zur CSS-transition-Dauer passen
+
+      function pickNextTipIndex() {
+        if (TIPS.length <= 1) return 0;
+        var idx;
+        do {
+          idx = Math.floor(Math.random() * TIPS.length);
+        } while (idx === lastTipIndex);
+        lastTipIndex = idx;
+        return idx;
+      }
+
+      function typeTipLetterByLetter(text, charIndex) {
+        if (!loadingTipEl) return;
+
+        loadingTipEl.textContent = text.substring(0, charIndex);
+
+        if (charIndex < text.length) {
+          typingTimeoutId = setTimeout(function () {
+            typeTipLetterByLetter(text, charIndex + 1);
+          }, TYPING_SPEED_MS);
+        } else {
+          // Fertig getippt — eine Weile stehen lassen, dann ausblenden
+          // und nächsten Tipp starten.
+          typingTimeoutId = setTimeout(function () {
+            loadingTipEl.classList.remove("visible");
+            typingTimeoutId = setTimeout(showNextTip, TIP_FADE_OUT_MS);
+          }, TIP_HOLD_MS);
+        }
+      }
+
+      function showNextTip() {
+        if (!loadingTipEl || TIPS.length === 0) return;
+        var text = TIPS[pickNextTipIndex()];
+        loadingTipEl.classList.add("visible");
+        typeTipLetterByLetter(text, 0);
+      }
+
+      if (TIPS.length > 0) {
+        showNextTip();
+      }
+
+      // -------------------------------------------------------
+      // NEU (22.10.2026): Web-App (PWA)
+      //  - Service Worker (sw.js): App-Huelle, Installierbarkeit
+      //  - Versionsabgleich: version.json (wird beim Veroeffentlichen erzeugt) gegen die Version dieser Seite; weicht sie ab, erscheint
+      //    "Neue Version verfuegbar - Neu laden". Beim Entwickeln (Platzhalter nicht ersetzt) passiert nichts.
+      //  - Installieren: Android/Chrome/Edge zeigen einen eigenen Knopf (beforeinstallprompt), iPhone/iPad einen Hinweis "Teilen > Zum Home-Bildschirm".
+      // -------------------------------------------------------
+      var VIRGO_BUILD = "2026.10.24-1542";
+      if ("serviceWorker" in navigator && (location.protocol === "https:" || location.hostname === "localhost" || location.hostname === "127.0.0.1")) {
+        window.addEventListener("load", function () {
+          navigator.serviceWorker.register("sw.js").catch(function () { /* ohne Service Worker laeuft das Spiel trotzdem */ });
+        });
+      }
+
+      function virgoCheckForUpdate() {
+        if (VIRGO_BUILD.indexOf("__") === 0) return;   // Entwicklungsstand ohne Versionsnummer
+        fetch("version.json?t=" + Date.now(), { cache: "no-store" }).then(function (r) { return r.ok ? r.json() : null; }).then(function (j) {
+          if (j && j.version && j.version !== VIRGO_BUILD) {
+            var b = document.getElementById("virgo-update-banner");
+            if (b) b.style.display = "block";
+          }
+        }).catch(function () { /* offline: kein Hinweis */ });
+      }
+      var virgoUpdateBtn = document.getElementById("virgo-update-btn");
+      if (virgoUpdateBtn) virgoUpdateBtn.onclick = function () { location.reload(); };
+      setTimeout(virgoCheckForUpdate, 30000);
+      setInterval(virgoCheckForUpdate, 10 * 60 * 1000);
+      document.addEventListener("visibilitychange", function () { if (!document.hidden) virgoCheckForUpdate(); });
+
+      var virgoInstallEvent = null;
+      var virgoStandalone = (window.matchMedia && window.matchMedia("(display-mode: standalone)").matches) || (window.matchMedia && window.matchMedia("(display-mode: fullscreen)").matches) || window.navigator.standalone === true;
+      var virgoInstallDismissed = false;
+      try { virgoInstallDismissed = localStorage.getItem("virgo_install_no") === "1"; } catch (e) { /* ignorieren */ }
+      function virgoShowInstallBar(text, showButton) {
+        if (virgoStandalone || virgoInstallDismissed) return;
+        var bar = document.getElementById("virgo-install-bar");
+        if (!bar) return;
+        document.getElementById("virgo-install-text").textContent = text;
+        document.getElementById("virgo-install-btn").style.display = showButton ? "inline-block" : "none";
+        bar.style.display = "block";
+        setTimeout(function () { bar.style.display = "none"; }, 20000);
+      }
+      window.addEventListener("beforeinstallprompt", function (e) {
+        e.preventDefault();
+        virgoInstallEvent = e;
+        setTimeout(function () { virgoShowInstallBar("VIRGO als App auf dein Gerät installieren?", true); }, 15000);
+      });
+      window.addEventListener("appinstalled", function () { var bar = document.getElementById("virgo-install-bar"); if (bar) bar.style.display = "none"; });
+      var virgoInstallBtn = document.getElementById("virgo-install-btn");
+      if (virgoInstallBtn) virgoInstallBtn.onclick = function () {
+        if (virgoInstallEvent) { virgoInstallEvent.prompt(); virgoInstallEvent = null; }
+        document.getElementById("virgo-install-bar").style.display = "none";
+      };
+      var virgoInstallNo = document.getElementById("virgo-install-no");
+      if (virgoInstallNo) virgoInstallNo.onclick = function () {
+        try { localStorage.setItem("virgo_install_no", "1"); } catch (e) { /* ignorieren */ }
+        document.getElementById("virgo-install-bar").style.display = "none";
+      };
+      // iPhone/iPad (Safari kennt keinen Installieren-Knopf): einmaliger Hinweis nach dem Laden
+      if (/iPhone|iPad|iPod/i.test(navigator.userAgent) && !virgoStandalone) {
+        setTimeout(function () { virgoShowInstallBar("Für Vollbild ohne Adressleiste: Teilen-Symbol, dann \"Zum Home-Bildschirm\".", false); }, 20000);
+      }
+
+      var loadingBar = document.getElementById("custom-loading-bar");
+      var loadingOverlay = document.getElementById("custom-loading");
+
+      // -------------------------------------------------------
+      // NEU (07.09.): Diagnose ohne Entwicklertools — schreibt Fortschritt
+      // und Fehler in localStorage, der einen Absturz/Reload der Seite
+      // übersteht (im Gegensatz zu normalen JS-Variablen). Auf Geräten
+      // ohne Web-Inspector-Zugriff (z.B. iPhone ohne Mac) lässt sich so
+      // trotzdem ablesen, wie weit ein vorheriger Versuch gekommen ist.
+      // -------------------------------------------------------
+      var DEBUG_KEY_PROGRESS = "virgo_debug_last_progress";
+      var DEBUG_KEY_ERROR    = "virgo_debug_last_error";
+      var debugInfoEl = document.getElementById("custom-debug-info");
+
+      function showDebugInfo(text) {
+        if (!debugInfoEl) return;
+        debugInfoEl.textContent = text;
+        debugInfoEl.style.display = "block";
+      }
+
+      // Beim Laden sofort prüfen: gibt's Reste von einem vorherigen,
+      // nicht erfolgreich abgeschlossenen Versuch?
+      try {
+        var prevProgress = localStorage.getItem(DEBUG_KEY_PROGRESS);
+        var prevError    = localStorage.getItem(DEBUG_KEY_ERROR);
+        if (prevError) {
+          showDebugInfo("Letzter Versuch — Fehler:\n" + prevError);
+        } else if (prevProgress) {
+          showDebugInfo("Letzter Versuch kam bis: " + prevProgress);
+        }
+      } catch (e) { /* localStorage evtl. nicht verfügbar — einfach ignorieren */ }
+
+      // Jede JS-Fehlermeldung global mitschreiben (übersteht auch einen
+      // harten Reload, den z.B. iOS bei Speicherdruck manchmal auslöst).
+      window.addEventListener("error", function (e) {
+        try {
+          var info = (e && e.message ? e.message : "unbekannter Fehler") +
+                      (e && e.filename ? " (" + e.filename + ":" + e.lineno + ")" : "") +
+                      " — " + new Date().toISOString();
+          localStorage.setItem(DEBUG_KEY_ERROR, info);
+        } catch (err) { /* ignorieren */ }
+      });
+
+      // -------------------------------------------------------
+      // NEU (22.10.2026): Hinweis bei langem Laden und verstaendliche Fehlermeldung.
+      // Nach WARN_AFTER_MS ohne fertiges Spiel erscheint rechts ein Kasten ("Firewall? Kindersicherung? ..."); steht der Fortschritt
+      // laenger still (STALL_AFTER_MS), kommt ein zusaetzlicher Hinweis. Schlaegt das Laden fehl, steht statt der rohen Fehlermeldung
+      // eine Erklaerung mit Knopf "Erneut versuchen".
+      // -------------------------------------------------------
+      var WARN_AFTER_MS  = 12000;
+      var STALL_AFTER_MS = 20000;
+      var loadStartedAt = Date.now();
+      var lastProgressValue = 0;
+      var lastProgressAt = Date.now();
+      var loadFinished = false;
+      var loadFailed = false;
+      var warningEl = document.getElementById("custom-loading-warning");
+
+      function escapeHtml(s) {
+        return String(s).replace(/[&<>"]/g, function (c) { return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]; });
+      }
+
+      function updateLoadingWarning() {
+        if (loadFinished || loadFailed || !warningEl) return;
+        var now = Date.now();
+        if (now - loadStartedAt < WARN_AFTER_MS) return;
+        var html = "<b>Das Laden dauert länger als üblich.</b><br>" +
+                   "Es scheint ein Problem mit deiner Internetverbindung zu geben. Firewall? Kindersicherung? Bitte prüfen!" +
+                   "<div class='sub'>Bisher geladen: " + Math.round(lastProgressValue * 100) + " %</div>";
+        if (now - lastProgressAt >= STALL_AFTER_MS) {
+          html += "<div class='sub'>Der Fortschritt steht seit " + Math.round((now - lastProgressAt) / 1000) +
+                  " Sekunden still. Wahrscheinlich blockiert ein Filter den Download. Versuche Mobilfunk oder ein anderes WLAN.</div>";
+        }
+        warningEl.className = "";
+        warningEl.innerHTML = html;
+        warningEl.style.display = "block";
+      }
+      var warningTimerId = setInterval(updateLoadingWarning, 1000);
+
+      function showLoadError(message) {
+        loadFailed = true;
+        clearInterval(warningTimerId);
+        if (!warningEl) return;
+        var text = String(message);
+        var networkLike = /wasm|fetch|network|netzwerk|failed to|load failed|NetworkError|abort/i.test(text);
+        var html = "<b>Das Spiel konnte nicht geladen werden.</b><br>";
+        if (networkLike) {
+          html += "Der Download wurde blockiert oder abgebrochen. Wahrscheinlich blockiert ein Netzwerkfilter (Firewall, Kindersicherung, Jugendschutz) dieses WLAN." +
+                  "<div class='sub'>Bitte Mobilfunk oder ein anderes WLAN versuchen.</div>";
+        } else {
+          html += "Auf diesem Gerät steht vielleicht nicht genug Speicher zur Verfügung." +
+                  "<div class='sub'>Bitte andere Tabs und Apps schließen und erneut versuchen.</div>";
+        }
+        html += "<div class='tech'>" + escapeHtml(text.slice(0, 300)) + "</div>" +
+                "<button onclick='location.reload()'>Erneut versuchen</button>";
+        warningEl.className = "error";
+        warningEl.innerHTML = html;
+        warningEl.style.display = "block";
+      }
+
+      createUnityInstance(canvas, {
+        arguments: [],
+        dataUrl: "Build/de29a37c607fd718a9dd6b82469e2040.data.unityweb",
+        frameworkUrl: "Build/1c1ba9d8feaec05858f1816f2a859a2f.framework.js.unityweb",
+        codeUrl: "Build/5d6e7a45ce2e9690f43309b51f2eb78e.wasm.unityweb",
+        streamingAssetsUrl: "StreamingAssets",
+        companyName: "aitan:games",
+        productName: "VIRGO Space Dominion",
+        productVersion: "0.1.0",
+        // matchWebGLToCanvasSize: false, // Uncomment this to separately control WebGL canvas render size and DOM element size.
+        // devicePixelRatio: 1, // Uncomment this to override low DPI rendering on high DPI displays.
+      }, (progress) => {
+        // Echter Ladefortschritt von Unity (0 bis 1)
+        if (loadingBar) loadingBar.style.width = (progress * 100) + "%";
+        if (progress > lastProgressValue) { lastProgressValue = progress; lastProgressAt = Date.now(); }
+
+        // NEU (07.09.): Fortschritt laufend mitschreiben, damit bei einem
+        // Absturz/Reload der LETZTE bekannte Stand erhalten bleibt.
+        try {
+          localStorage.setItem(DEBUG_KEY_PROGRESS,
+            Math.round(progress * 100) + "% um " + new Date().toISOString());
+        } catch (e) { /* ignorieren */ }
+      }).then((unityInstance) => {
+        resizeCanvas(); // nochmal nach dem Laden, falls sich währenddessen was verändert hat
+        loadFinished = true;
+        clearInterval(warningTimerId);
+        if (warningEl) warningEl.style.display = "none";
+
+        // NEU (07.09.): Erfolgreich geladen — alte Diagnose-Reste löschen,
+        // damit beim NÄCHSTEN Start kein veralteter Fehler mehr angezeigt
+        // wird, als wäre er gerade erst passiert.
+        try {
+          localStorage.removeItem(DEBUG_KEY_PROGRESS);
+          localStorage.removeItem(DEBUG_KEY_ERROR);
+        } catch (e) { /* ignorieren */ }
+
+        // Tipp-Anzeige stoppen und Ladebildschirm sanft ausblenden.
+        if (typingTimeoutId) clearTimeout(typingTimeoutId);
+        if (loadingOverlay) {
+          loadingOverlay.style.opacity = "0";
+          setTimeout(function () {
+            loadingOverlay.style.display = "none";
+          }, 600); // muss zur CSS-transition-Dauer von #custom-loading passen
+        }
+      }).catch((message) => {
+        // NEU (07.09.): Auch hier mitschreiben, nicht nur bei window.onerror
+        // — createUnityInstance() lehnt manche Fehler über catch() ab,
+        // nicht über das globale error-Event.
+        try {
+          localStorage.setItem(DEBUG_KEY_ERROR, String(message) + " — " + new Date().toISOString());
+        } catch (e) { /* ignorieren */ }
+        showLoadError(message);   // 22.10.2026: statt alert() eine verstaendliche Erklaerung im Ladebildschirm
+      });
+    </script>
+  </body>
+</html>
