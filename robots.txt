@@ -1,0 +1,4 @@
+User-agent: *
+Allow: /
+
+Sitemap: https://virgo-sd.github.io/sitemap.xml
